@@ -6,3 +6,4 @@ __pycache__/
 testenv/
 *.log
 overray.pid
+test_py.ps1
