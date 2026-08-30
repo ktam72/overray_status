@@ -1,14 +1,8 @@
 # Python
 __pycache__/
-*.py[cod]
-
-# Virtual env
-testenv/
+*.pyc
 
 # Runtime files
+testenv/
 *.log
 overray.pid
-
-# OS
-.DS_Store
-Thumbs.db
