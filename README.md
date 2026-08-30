@@ -10,7 +10,7 @@ Windows PC の状態を表示するオーバーレイ（HUD）。GPU0, GPU1, CPU
 
 ## 機能
 
-- GPU の表示：VRAM, TEMP, FAN, PWR, LOAD
+- GPU の表示：VRAM, TEMP, FAN, PWR, LOAD, 帯域(BW), PCIe负荷(PCIE)
 - CPU の表示：PWR, LOAD
 - メモリ：使用サイズ／最大サイズ（GB）
 - ネットワーク：DOWN, UP の速度

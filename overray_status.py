@@ -27,6 +27,8 @@ CATEGORY_COLORS = {
     "load": QColor(120, 255, 150),
     "power": QColor(255, 170, 60),
     "fan": QColor(90, 220, 255),
+    "bandwidth": QColor(120, 200, 255),
+    "pcie": QColor(200, 220, 90),
     "vram": QColor(190, 120, 255),
     "cpu": QColor(140, 255, 160),
     "mem": QColor(255, 170, 70),
@@ -41,12 +43,60 @@ class GPUReader:
     def __init__(self):
         pynvml.nvmlInit()
         self.count = pynvml.nvmlDeviceGetCount()
+        members = [m for m in dir(pynvml) if m.startswith("nvmlDeviceGet")]
+
+        def find(suffix):
+            matches = [m for m in members if m.endswith(suffix)]
+            if not matches:
+                raise AttributeError("pynvml: no function ending with " + suffix)
+            for m in sorted(matches, reverse=True):
+                if not m.startswith("nvmlDeviceGetGpu"):
+                    return getattr(pynvml, m)
+            return getattr(pynvml, matches[0])
+
+        self._throughput = find("Throughput")
+        self._link_max_speed = find("LinkMaxSpeed")
+        self._max_gen = find("LinkGeneration")
+        self._max_width = find("LinkWidth")
+        self._last_total = {}
+        self._last_ts = {}
+        self._gt_by_maxspeed = {0: 2.5, 1: 5, 2: 8, 3: 16, 4: 16, 5: 32, 6: 64, 7: 128}
+
+    def _bandwidth_pcie(self, i, h):
+        try:
+            total = self._throughput(h, pynvml.NVML_PCIE_UTIL_TX_BYTES) + self._throughput(h, pynvml.NVML_PCIE_UTIL_RX_BYTES)
+        except Exception:
+            return (None, None)
+        now = time.time()
+        last = self._last_total.get(i)
+        last_ts = self._last_ts.get(i)
+        self._last_total[i] = total
+        self._last_ts[i] = now
+        if last is None or last_ts is None or now - last_ts <= 0:
+            return (None, None)
+        dt = now - last_ts
+        delta_mb = total - last
+        if delta_mb < 0:
+            delta_mb = 0
+        gbs = delta_mb / dt / 1000.0
+        try:
+            maxspeed = self._link_max_speed(h)
+            gen = self._max_gen(h)
+            width = self._max_width(h)
+        except Exception:
+            return (gbs, None)
+        gt = self._gt_by_maxspeed.get(maxspeed, 16)
+        theory = 2.0 * gen * gt * width / 8.0
+        if theory <= 0:
+            return (gbs, None)
+        pcie_pct = gbs / theory * 100.0
+        return (gbs, pcie_pct)
 
     def read(self):
         rows = []
         for i in range(self.count):
             h = pynvml.nvmlDeviceGetHandleByIndex(i)
-            r = dict(name=None, temp=None, load=None, power=None, rpm=None, fanspd=None)
+            r = dict(name=None, temp=None, load=None, power=None, rpm=None, fanspd=None, bandwidth=None, pcie=None)
             try:
                 r["name"] = pynvml.nvmlDeviceGetName(h)
             except Exception:
@@ -74,6 +124,12 @@ class GPUReader:
             try:
                 mem = pynvml.nvmlDeviceGetMemoryInfo(h)
                 r["vram_used"] = mem.used
+            except Exception:
+                pass
+            try:
+                bw, pcie = self._bandwidth_pcie(i, h)
+                r["bandwidth"] = bw
+                r["pcie"] = pcie
             except Exception:
                 pass
             rows.append(r)
@@ -235,6 +291,10 @@ class Bar(QWidget):
                 toks.append((f"TEMP{r['temp']}\u00b0C ", "temp"))
             if r.get("vram_used") is not None:
                 toks.append((f"VRAM{r['vram_used'] / 1024 / 1024:.0f}MB ", "vram"))
+            if r.get("bandwidth") is not None:
+                toks.append((f"BW{r['bandwidth']:.1f}GB/s ", "bandwidth"))
+            if r.get("pcie") is not None:
+                toks.append((f"PCIE{r['pcie']:.0f}% ", "pcie"))
             lines.append(toks)
 
         lines.append([
