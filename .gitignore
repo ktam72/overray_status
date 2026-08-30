@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual env
+testenv/
+
+# Runtime files
+*.log
+overray.pid
+
+# OS
+.DS_Store
+Thumbs.db
