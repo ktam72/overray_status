@@ -2,7 +2,6 @@
 """PC status overlay for Windows (top-center frameless translucent bar)."""
 
 import sys
-import time
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -27,8 +26,6 @@ CATEGORY_COLORS = {
     "load": QColor(120, 255, 150),
     "power": QColor(255, 170, 60),
     "fan": QColor(90, 220, 255),
-    "bandwidth": QColor(120, 200, 255),
-    "pcie": QColor(200, 220, 90),
     "vram": QColor(190, 120, 255),
     "cpu": QColor(140, 255, 160),
     "mem": QColor(255, 170, 70),
@@ -45,58 +42,11 @@ class GPUReader:
         self.count = pynvml.nvmlDeviceGetCount()
         members = [m for m in dir(pynvml) if m.startswith("nvmlDeviceGet")]
 
-        def find(suffix):
-            matches = [m for m in members if m.endswith(suffix)]
-            if not matches:
-                raise AttributeError("pynvml: no function ending with " + suffix)
-            for m in sorted(matches, reverse=True):
-                if not m.startswith("nvmlDeviceGetGpu"):
-                    return getattr(pynvml, m)
-            return getattr(pynvml, matches[0])
-
-        self._throughput = find("Throughput")
-        self._link_max_speed = find("LinkMaxSpeed")
-        self._max_gen = find("LinkGeneration")
-        self._max_width = find("LinkWidth")
-        self._last_total = {}
-        self._last_ts = {}
-        self._gt_by_maxspeed = {0: 2.5, 1: 5, 2: 8, 3: 16, 4: 16, 5: 32, 6: 64, 7: 128}
-
-    def _bandwidth_pcie(self, i, h):
-        try:
-            total = self._throughput(h, pynvml.NVML_PCIE_UTIL_TX_BYTES) + self._throughput(h, pynvml.NVML_PCIE_UTIL_RX_BYTES)
-        except Exception:
-            return (None, None)
-        now = time.time()
-        last = self._last_total.get(i)
-        last_ts = self._last_ts.get(i)
-        self._last_total[i] = total
-        self._last_ts[i] = now
-        if last is None or last_ts is None or now - last_ts <= 0:
-            return (None, None)
-        dt = now - last_ts
-        delta_mb = total - last
-        if delta_mb < 0:
-            delta_mb = 0
-        gbs = delta_mb / dt / 1000.0
-        try:
-            maxspeed = self._link_max_speed(h)
-            gen = self._max_gen(h)
-            width = self._max_width(h)
-        except Exception:
-            return (gbs, None)
-        gt = self._gt_by_maxspeed.get(maxspeed, 16)
-        theory = 2.0 * gen * gt * width / 8.0
-        if theory <= 0:
-            return (gbs, None)
-        pcie_pct = gbs / theory * 100.0
-        return (gbs, pcie_pct)
-
     def read(self):
         rows = []
         for i in range(self.count):
             h = pynvml.nvmlDeviceGetHandleByIndex(i)
-            r = dict(name=None, temp=None, load=None, power=None, rpm=None, fanspd=None, bandwidth=None, pcie=None)
+            r = dict(name=None, temp=None, load=None, power=None, rpm=None, fanspd=None)
             try:
                 r["name"] = pynvml.nvmlDeviceGetName(h)
             except Exception:
@@ -126,12 +76,6 @@ class GPUReader:
                 r["vram_used"] = mem.used
             except Exception:
                 pass
-            try:
-                bw, pcie = self._bandwidth_pcie(i, h)
-                r["bandwidth"] = bw
-                r["pcie"] = pcie
-            except Exception:
-                pass
             rows.append(r)
         return rows
 
@@ -145,13 +89,15 @@ class CpuReader:
     def _init(self):
         import HardwareMonitor
         import clr
+
         try:
-            clr.AddReference('LibreHardwareMonitorLib')
+            clr.AddReference("LibreHardwareMonitorLib")
         except Exception:
             pass
         try:
             import importlib
-            lhW = importlib.import_module('LibreHardwareMonitor.Hardware')
+
+            lhW = importlib.import_module("LibreHardwareMonitor.Hardware")
             c = lhW.Computer()
         except Exception:
             self._hw = None
@@ -167,7 +113,7 @@ class CpuReader:
         try:
             for h in list(self._hw.Hardware):
                 try:
-                    if str(h.HardwareType) == 'Motherboard' and self._board is None:
+                    if str(h.HardwareType) == "Motherboard" and self._board is None:
                         self._board = str(h.Name)
                 except Exception:
                     pass
@@ -189,12 +135,12 @@ class CpuReader:
                 except Exception:
                     continue
                 ht = str(h.HardwareType)
-                if ht == 'Motherboard' and board is None:
+                if ht == "Motherboard" and board is None:
                     try:
                         board = str(h.Name)
                     except Exception:
                         pass
-                if ht == 'Cpu' and cpu_name is None:
+                if ht == "Cpu" and cpu_name is None:
                     try:
                         cpu_name = str(h.Name)
                     except Exception:
@@ -211,14 +157,14 @@ class CpuReader:
                         continue
                     if v is None:
                         continue
-                    if ht == 'Cpu' and st == 'Temperature':
+                    if ht == "Cpu" and st == "Temperature":
                         if temp is None or v > temp:
                             temp = v
-                    elif ht == 'Cpu' and st == 'Load' and load is None:
+                    elif ht == "Cpu" and st == "Load" and load is None:
                         load = v
-                    elif ht == 'Cpu' and st == 'Power' and power is None:
+                    elif ht == "Cpu" and st == "Power" and power is None:
                         power = v
-                    elif ht == 'Cpu' and st == 'Control' and fan is None:
+                    elif ht == "Cpu" and st == "Control" and fan is None:
                         fan = v
         except Exception:
             pass
@@ -234,9 +180,7 @@ class Bar(QWidget):
         self.net_last_sent = psutil.net_io_counters().bytes_sent
         self.cpu_last = psutil.cpu_percent(interval=None)
 
-        self.setWindowFlags(
-            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
-        )
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(BAR_W, BAR_H)
 
@@ -276,13 +220,15 @@ class Bar(QWidget):
         lines = []
         for i, r in enumerate(rows):
             label = r["name"] or ("GPU" + str(i))
-            lines.append([
-                (f"GPU{i}: ", None),
-                (f"{label} ", None),
-            ])
+            lines.append(
+                [
+                    (f"GPU{i}: ", None),
+                    (f"{label} ", None),
+                ]
+            )
             toks = []
             if r["load"] is not None:
-                toks.append((f"LOAD{r['load']}% ", "load"))
+                toks.append((f"LOAD{r['load']:.1f}% ", "load"))
             if r["power"] is not None:
                 toks.append((f"PWR{r['power']:.1f}W ", "power"))
             if r["fanspd"] is not None:
@@ -291,33 +237,35 @@ class Bar(QWidget):
                 toks.append((f"TEMP{r['temp']}\u00b0C ", "temp"))
             if r.get("vram_used") is not None:
                 toks.append((f"VRAM{r['vram_used'] / 1024 / 1024:.0f}MB ", "vram"))
-            if r.get("bandwidth") is not None:
-                toks.append((f"BW{r['bandwidth']:.1f}GB/s ", "bandwidth"))
-            if r.get("pcie") is not None:
-                toks.append((f"PCIE{r['pcie']:.0f}% ", "pcie"))
             lines.append(toks)
 
-        lines.append([
-            ("CPU: ", None),
-            (f"{cpu_name} ", None),
-        ])
+        lines.append(
+            [
+                ("CPU: ", None),
+                (f"{cpu_name} ", None),
+            ]
+        )
         cpu_toks = []
         if c_load is not None:
-            cpu_toks.append((f"LOAD{c_load:.0f}% ", "load"))
+            cpu_toks.append((f"LOAD{c_load:.1f}% ", "load"))
         if c_power is not None:
             cpu_toks.append((f"PWR{c_power:.1f}W ", "power"))
         lines.append(cpu_toks)
 
         lines.append([("MEMORY: ", None)])
-        lines.append([
-            (f"{mem.used / 1024 ** 3:.0f}GB／{mem_total / 1024 ** 3:.0f}GB ", "mem"),
-        ])
+        lines.append(
+            [
+                (f"{mem.used / 1024**3:.0f}GB／{mem_total / 1024**3:.0f}GB ", "mem"),
+            ]
+        )
 
         lines.append([("Network Speed: ", None)])
-        lines.append([
-            (f"UP {sent_bps/1e6:.1f}Mbps↑ ", "net_up"),
-            (f"DOWN {recv_bps/1e6:.1f}Mbps↓ ", "net_down"),
-        ])
+        lines.append(
+            [
+                (f"UP {sent_bps / 1e6:.1f}Mbps↑ ", "net_up"),
+                (f"DOWN {recv_bps / 1e6:.1f}Mbps↓ ", "net_down"),
+            ]
+        )
 
         if board:
             pass
@@ -339,8 +287,10 @@ class Bar(QWidget):
         fm = QFontMetrics(font)
         lines = getattr(self, "_items", [])
         line_height = FONT_SIZE + 6
+
         def line_w(line):
             return sum(fm.horizontalAdvance(t) for t, c in line)
+
         max_w = max((line_w(line) for line in lines), default=100)
         w = max_w + BAR_MARGIN * 2
         h = len(lines) * line_height + BAR_MARGIN * 2
@@ -396,7 +346,9 @@ class Bar(QWidget):
                     if category is not None:
                         if category != cached_category:
                             cached_category = category
-                            cached_category_pen = CATEGORY_COLORS.get(category, DEFAULT_COLOR)
+                            cached_category_pen = CATEGORY_COLORS.get(
+                                category, DEFAULT_COLOR
+                            )
                         p.setPen(cached_category_pen)
                         w = fm.horizontalAdvance(text)
                         x_r -= w
