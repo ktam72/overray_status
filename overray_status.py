@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """PC status overlay for Windows (top-center frameless translucent bar)."""
 
+import os
 import sys
+import shutil
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -18,6 +20,11 @@ BAR_MARGIN = 8
 FONT_SIZE = 12
 SPACING = 6
 UPD_INTERVAL_MS = 1000
+SMART_REFRESH_TICKS = 3
+SMARTCTL_PATHS = [
+    r"C:\Program Files\smartmontools\bin\smartctl.exe",
+    r"C:\Program Files (x86)\smartmontools\bin\smartctl.exe",
+]
 HOTKEY_MOD = Qt.AltModifier
 HOTKEY_KEY = Qt.Key_Q
 
@@ -105,6 +112,7 @@ class CpuReader:
         try:
             c.IsCpuEnabled = True
             c.IsMotherboardEnabled = True
+            c.IsStorageEnabled = True
             c.Open()
         except Exception:
             self._hw = None
@@ -120,14 +128,49 @@ class CpuReader:
         except Exception:
             pass
 
+    def _read_drive(self, h):
+        name = str(getattr(h, "Name", "?"))
+        temp = total = free = used = None
+        try:
+            sensors = list(h.Sensors)
+        except Exception:
+            sensors = []
+        for s in sensors:
+            try:
+                st = str(s.SensorType)
+                v = s.Value
+                nm = str(getattr(s, "Name", ""))
+            except Exception:
+                continue
+            if st == "Temperature" and v is not None:
+                if "Warning" in nm or "Critical" in nm:
+                    continue
+                if temp is None:
+                    temp = v
+            elif "Total Space" in nm:
+                total = v
+            elif "Free Space" in nm:
+                free = v
+            elif "Used Space" in nm:
+                used = v
+        return {
+            "name": name,
+            "temp": temp,
+            "total": total,
+            "free": free,
+            "used": used,
+            "mounted": True,
+        }
+
     def read(self):
         cpu_name = None
         board = self._board
         temp = load = power = fan = None
+        drives = []
         if self._hw is None:
             self._init()
             if self._hw is None:
-                return (None, None, None, None, None, None)
+                return (None, None, None, None, None, None, [])
         try:
             for h in list(self._hw.Hardware):
                 try:
@@ -145,6 +188,9 @@ class CpuReader:
                         cpu_name = str(h.Name)
                     except Exception:
                         pass
+                if ht == "Storage":
+                    drives.append(self._read_drive(h))
+                    continue
                 try:
                     sensors = list(h.Sensors)
                 except Exception:
@@ -153,22 +199,154 @@ class CpuReader:
                     try:
                         st = str(s.SensorType)
                         v = s.Value
+                        nm = str(getattr(s, "Name", ""))
                     except Exception:
                         continue
                     if v is None:
                         continue
                     if ht == "Cpu" and st == "Temperature":
-                        if temp is None or v > temp:
+                        if "Package" in nm:
+                            temp = v
+                        elif temp is None or v > temp:
                             temp = v
                     elif ht == "Cpu" and st == "Load" and load is None:
                         load = v
-                    elif ht == "Cpu" and st == "Power" and power is None:
-                        power = v
+                    elif ht == "Cpu" and st == "Power":
+                        if power is None or "Package" in nm:
+                            power = v
                     elif ht == "Cpu" and st == "Control" and fan is None:
                         fan = v
         except Exception:
             pass
-        return (cpu_name, board, temp, load, power, fan)
+        return (cpu_name, board, temp, load, power, fan, drives)
+
+
+def _find_smartctl():
+    for p in SMARTCTL_PATHS:
+        if os.path.exists(p):
+            return p
+    exe = shutil.which("smartctl")
+    return exe or SMARTCTL_PATHS[0]
+
+
+class DriveReader:
+    def __init__(self):
+        from pySMART import device as devmod
+        from pySMART.smartctl import Smartctl
+
+        self._devmod = devmod
+        self._Smartctl = Smartctl
+        self.smartctl_path = _find_smartctl()
+        self._rows = []
+        self.refresh()
+
+    def _discover_devices(self):
+        import subprocess
+
+        try:
+            out = subprocess.run(
+                [self.smartctl_path, "--scan"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout
+        except Exception:
+            out = ""
+        devs = []
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("/dev/") and " -d " in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    devs.append((parts[0], parts[2].strip()))
+                elif len(parts) >= 2:
+                    devs.append((parts[0], parts[1][2:].strip()))
+        if not devs:
+            for i in range(26):
+                letter = chr(ord("a") + i)
+                devs.append((f"/dev/sd{letter}", "auto"))
+        return devs
+
+    def _match(self, disks, vols):
+        matched = set()
+        rows = []
+        disks_by_total = sorted(
+            [d for d in disks if d["total"] > 0],
+            key=lambda d: d["total"],
+        )
+        for d in disks_by_total:
+            best = None
+            best_diff = None
+            for v in vols:
+                if v["vol"] in matched:
+                    continue
+                diff = abs(d["total"] - v["total"])
+                if best is None or diff < best_diff:
+                    best = v
+                    best_diff = diff
+            if best is not None:
+                matched.add(best["vol"])
+                rows.append(self._row(d, best))
+        remaining = [v for v in vols if v["vol"] not in matched]
+        remaining.sort(key=lambda v: v["total"], reverse=True)
+        ai = 0
+        for d in disks:
+            if d["total"] > 0 or ai >= len(remaining):
+                continue
+            v = remaining[ai]
+            ai += 1
+            if v["vol"] not in matched:
+                matched.add(v["vol"])
+                rows.append(self._row(d, v))
+        for d in disks:
+            if any(r["name"] == d["model"] for r in rows):
+                continue
+            rows.append(self._row(d, None))
+        return rows
+
+    def _row(self, d, v):
+        return {
+            "name": d["model"],
+            "temp": d.get("temp"),
+            "total": v["total"] if v else d["total"],
+            "used": v["used"] if v else None,
+        }
+
+    def read(self, refresh=True):
+        if not refresh and self._rows:
+            return self._rows
+        smartctl = self._Smartctl(smartctl_path=self.smartctl_path)
+        disks = []
+        for path, iface in self._discover_devices():
+            try:
+                dev = self._devmod.Device(path, interface=iface, smartctl=smartctl)
+                disks.append(
+                    {
+                        "model": dev.model,
+                        "temp": dev.temperature,
+                        "total": dev.size,
+                    }
+                )
+            except Exception:
+                continue
+        vols = []
+        for part in psutil.disk_partitions():
+            try:
+                u = psutil.disk_usage(part.mountpoint)
+                vols.append(
+                    {
+                        "vol": part.mountpoint.rstrip("\\\\"),
+                        "used": u.used,
+                        "total": u.total,
+                    }
+                )
+            except Exception:
+                continue
+        self._rows = self._match(disks, vols)
+        return self._rows
+
+    def refresh(self):
+        self.read(refresh=True)
 
 
 class Bar(QWidget):
@@ -176,6 +354,7 @@ class Bar(QWidget):
         super().__init__()
         self.gpu = GPUReader()
         self.cpu = CpuReader()
+        self.drives = DriveReader()
         self.net_last_recv = psutil.net_io_counters().bytes_recv
         self.net_last_sent = psutil.net_io_counters().bytes_sent
         self.cpu_last = psutil.cpu_percent(interval=None)
@@ -215,7 +394,12 @@ class Bar(QWidget):
         mem = psutil.virtual_memory()
         mem_total = mem.total
 
-        cpu_name, board, c_temp, c_load, c_power, c_fan = self.cpu.read()
+        cpu_name, board, c_temp, c_load, c_power, c_fan, _ = self.cpu.read()
+
+        self._drive_tick = getattr(self, "_drive_tick", 0)
+        refresh = self._drive_tick % SMART_REFRESH_TICKS == 0
+        self._drive_tick += 1
+        drives = self.drives.read(refresh=refresh)
 
         lines = []
         for i, r in enumerate(rows):
@@ -248,9 +432,31 @@ class Bar(QWidget):
         cpu_toks = []
         if c_load is not None:
             cpu_toks.append((f"LOAD{c_load:.1f}% ", "load"))
-        if c_power is not None:
+        if c_power is not None and c_power > 0:
             cpu_toks.append((f"PWR{c_power:.1f}W ", "power"))
         lines.append(cpu_toks)
+
+        if drives:
+            for d in drives:
+                lines.append(
+                    [
+                        (f"DRIVE: ", None),
+                        (f"{d['name']} ", None),
+                    ]
+                )
+                toks = []
+                used = d.get("used")
+                total = d.get("total")
+                if used is not None and total is not None:
+                    toks.append(
+                        (f"Used{used / 1024**3:.0f}G/{total / 1024**3:.0f}G ", "mem")
+                    )
+                elif total is not None:
+                    toks.append((f"{total / 1024**3:.0f}G ", "mem"))
+                temp = d.get("temp")
+                if temp is not None:
+                    toks.append((f"{temp:.0f}\u00b0C ", "temp"))
+                lines.append(toks)
 
         lines.append([("MEMORY: ", None)])
         lines.append(
@@ -377,7 +583,32 @@ def main(argv):
     QApplication.processEvents()
     w._layout_size()
     QApplication.processEvents()
-    sys.stderr.write(f"DEBUG geo={w.geometry()} visible={w.isVisible()}\n")
+    try:
+        (
+            _cpu_name,
+            _board,
+            c_temp,
+            c_load,
+            c_power,
+            c_fan,
+            _drives,
+        ) = w.cpu.read()
+    except Exception:
+        c_temp = c_load = c_power = c_fan = None
+    drives = []
+    try:
+        drives = w.drives.read(refresh=True)
+    except Exception:
+        drives = []
+    drives_out = [
+        (d["name"], d["temp"], round(d["total"] / 1024**3), round(d["used"] / 1024**3))
+        for d in drives
+    ]
+    sys.stderr.write(
+        f"DEBUG geo={w.geometry()} visible={w.isVisible()}\n"
+        f"DEBUG cpu_temp={c_temp} cpu_load={c_load} cpu_power={c_power} c_fan={c_fan}\n"
+        f"DEBUG drives={drives_out}\n"
+    )
     sys.stderr.flush()
     sys.exit(app.exec())
 
