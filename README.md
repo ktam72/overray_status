@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File stop_overlay.ps1
 | スクリプト | 説明 |
 | --- | --- |
 | `start_overlay.ps1` | バックグラウンドで起動します。 |
-| `start_overlay_admin.ps1` | Administrator 権限で起動します。CPU 温度を正確に取得できます。初回は UAC ダイアログが表示されます。「はい」を選択してください。 |
+| `start_overlay_admin.ps1` | Administrator 権限で起動します。CPU 電力を正確に取得できます。初回は UAC ダイアログが表示されます。「はい」を選択してください。 |
 | `stop_overlay.ps1` | 起動したオーバーレイを停止します。 |
 | `install_startup.ps1` | ログオン時に自動起動するためのショートカットを配置します。 |
 | `uninstall_startup.ps1` | ログオン自動起動ショートカットを削除します。 |
