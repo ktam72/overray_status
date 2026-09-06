@@ -1,6 +1,6 @@
 ﻿﻿# overray-status
 
-Windows PC の状態を表示するオーバーレイアプリです。GPU0, GPU1, CPU, メモリ, ディライブ、ネットワーク速度をリアルタイムで表示します。
+Windows PC の状態を表示するオーバーレイアプリです。GPU0, GPU1, CPU, メモリ, ドライブ、ネットワーク速度をリアルタイムで表示します。
 
 ![screenshot](images/screenshot.png)
 
@@ -13,7 +13,7 @@ Windows PC の状態を表示するオーバーレイアプリです。GPU0, GPU
 - GPU の表示（VRAM, TEMP, FAN, PWR, LOAD）
 - CPU の表示（PWR, LOAD）
 - メモリ（使用サイズ / 最大サイズ）
-- ディライブ（SMART による容量と温度）
+- ドライブ（SMART による容量と温度）
 - ネットワーク（DOWN, UP の速度）
 
 ## インストール
