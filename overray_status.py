@@ -307,6 +307,7 @@ class DriveReader:
     def _row(self, d, v):
         return {
             "name": d["model"],
+            "letter": v["letter"] if v else None,
             "temp": d.get("temp"),
             "total": v["total"] if v else d["total"],
             "used": v["used"] if v else None,
@@ -336,6 +337,7 @@ class DriveReader:
                 vols.append(
                     {
                         "vol": part.mountpoint.rstrip("\\\\"),
+                        "letter": part.mountpoint.split(":")[0].split("\\")[0],
                         "used": u.used,
                         "total": u.total,
                     }
@@ -438,10 +440,11 @@ class Bar(QWidget):
 
         if drives:
             for d in drives:
+                letter = d.get("letter")
                 lines.append(
                     [
                         (f"DRIVE: ", None),
-                        (f"{d['name']} ", None),
+                        (f"{letter + ': ' if letter else ''}{d['name']} ", None),
                     ]
                 )
                 toks = []
@@ -601,7 +604,13 @@ def main(argv):
     except Exception:
         drives = []
     drives_out = [
-        (d["name"], d["temp"], round(d["total"] / 1024**3), round(d["used"] / 1024**3))
+        (
+            d["name"],
+            d.get("letter"),
+            d["temp"],
+            round(d["total"] / 1024**3),
+            round(d["used"] / 1024**3),
+        )
         for d in drives
     ]
     sys.stderr.write(
